@@ -1,0 +1,352 @@
+#!/usr/bin/env python
+import argparse # optparse is deprecated
+from itertools import islice # slicing for iterators
+import sys
+from nltk.stem.porter import *
+from nltk.corpus import wordnet as wn
+from nltk import trigrams, bigrams
+from nltk.util import ngrams
+from nltk import pos_tag
+import math
+import numpy
+ 
+# def word_matches(h, ref):
+#     return sum(1 for w in h if w in ref)
+
+def exact_word_matches(h, ref):
+    bitvec_ref = [False for _ in ref]
+    bitvec_h = [False for _ in h]
+    count = 0
+    for index, word in enumerate(h):
+        for ref_index, ref_word in enumerate(ref):
+            if not bitvec_ref[ref_index] and word == ref_word:
+                count += 1
+                bitvec_ref[ref_index] = True
+                bitvec_h[index] = True
+                break
+    return (count, bitvec_h, bitvec_ref)
+
+def porter_word_matches(h, ref, bitvec_h, bitvec_ref):
+    count = 0
+    for i, word in enumerate(h):
+        if not bitvec_h[i]:
+            for j, ref_word in enumerate(ref):
+                if not bitvec_ref[j]:
+                    if h[i] == ref[j]:
+                        count += 1
+                        bitvec_ref[j] = True
+                        bitvec_h[i] = True
+                        break
+    return (count, bitvec_h, bitvec_ref)
+
+def stemming(arr):
+    stemmer = PorterStemmer()
+    # stemmer = SnowballStemmer()
+    stem_arr = [stemmer.stem(word) for word in arr]
+    return stem_arr
+
+def synonyms(arr):
+    # syn_arr = [wn.synsets(word) for word in arr]
+    syn_arr = []
+    for word in arr:
+        syn_arr.append([lst for ss in wn.synsets(word) for lst in ss.lemma_names])
+    return syn_arr
+
+def wordnet_word_matches(h, ref, bitvec_h, bitvec_ref):
+    count = 0
+    # for i, word in enumerate(h):
+    #     if not bitvec_h[i]:
+    #         for j, ref_word in enumerate(ref):
+    #             if not bitvec_ref[j]:
+    #                 if h[i] in ref[j]:
+    #                     count += 1
+    #                     bitvec_ref[j] = True
+    #                     bitvec_h[i] = True
+
+    for i, syns in enumerate(h):
+        if not bitvec_h[i]:
+            for j, ref_syn in enumerate(ref):
+                if not bitvec_ref[j]:
+                    if check_syns(syns, ref_syn):
+                        count += 1
+                        bitvec_ref[j] = True
+                        bitvec_h[i] = True
+                        break
+    return (count, bitvec_h, bitvec_ref)
+
+# Have you sinned?
+def check_syns(h, ref):
+    # h_stem = stemming(h)
+    # ref_stem = stemming(ref)
+    for synset in h:
+        if synset in ref:
+            return True
+    return False
+
+def calc_chunks(h, ref, h_stem, ref_stem, h_syn, ref_syn):
+    chunk = 0
+    bitvec = [False for _ in ref]
+    i = 0
+    j = 0
+    changed = False
+    while i < len(h):
+        j = 0
+        changed = False
+        while j < len(ref):
+            # if i < len(h) and j < len(ref) and (h[i] == ref[j] or h_stem[i] == ref_stem[j] or h[i] in ref_syn[j]) and not bitvec[j]:
+            #     while i < len(h) and j < len(ref) and (h[i] == ref[j] or h_stem[i] == ref_stem[j] or h[i] in ref_syn[j]) and not bitvec[j]:
+            if i < len(h) and j < len(ref) and (h[i] == ref[j] or h_stem[i] == ref_stem[j] or check_syns(h_syn[i], ref_syn[j])) and not bitvec[j]:
+                while i < len(h) and j < len(ref) and (h[i] == ref[j] or h_stem[i] == ref_stem[j] or check_syns(h_syn[i], ref_syn[j])) and not bitvec[j]:
+            # if i < len(h) and j < len(ref) and (h[i] == ref[j] or h_stem[i] == ref_stem[j]) and not bitvec[j]:
+            #     while i < len(h) and j < len(ref) and (h[i] == ref[j] or h_stem[i] == ref_stem[j]) and not bitvec[j]:
+            # if i < len(h) and j < len(ref) and (h[i] == ref[j]) and not bitvec[j]:
+            #     while i < len(h) and j < len(ref) and (h[i] == ref[j]) and not bitvec[j]:
+                    bitvec[j] = True
+                    changed = True
+                    i += 1
+                    j += 1
+                chunk += 1
+            else:
+                j += 1
+        i = i + 1 if not changed else i
+    return chunk
+
+def calc_bigrams(h, ref):
+    bi_h = bigrams(" ".join(h))
+    bi_ref = bigrams(" ".join(ref))
+
+    count_b = 0
+    for b in set(bi_h):
+        if b in set(bi_ref):
+            count_b += 1
+    bi_r = count_b / float(len(bi_ref)) if len(bi_ref) != 0 else 0
+    bi_p = count_b / float(len(bi_h)) if len(bi_h) != 0 else 0
+
+    return (bi_r, bi_p)
+
+def calc_trigrams(h, ref):
+    tri_h = trigrams(" ".join(h))
+    tri_ref = trigrams(" ".join(ref))
+
+    count_t = 0
+    for t in set(tri_h):
+        if t in set(tri_ref):
+            count_t += 1
+    tri_r = count_t / float(len(tri_ref)) if len(tri_ref) != 0 else 0
+    tri_p = count_t / float(len(tri_h)) if len(tri_h) != 0 else 0
+
+    return (tri_r, tri_p)
+
+def calc_4grams(h, ref):
+    ngram_h = ngrams(h, 4)
+    ngram_ref = ngrams(ref, 4)
+
+    count_t = 0
+    for t in set(ngram_h):
+        if t in set(ngram_ref):
+            count_t += 1
+    ngram_r = count_t / float(len(ngram_ref)) if len(ngram_ref) != 0 else 0
+    ngram_p = count_t / float(len(ngram_h)) if len(ngram_h) != 0 else 0
+
+    return (ngram_r, ngram_p)
+
+def calc_ngrams(h, ref):
+    tri_h = trigrams(" ".join(h))
+    tri_ref = trigrams(" ".join(ref))
+
+    count_t = 0
+    for t in set(tri_h):
+        if t in set(tri_ref):
+            count_t += 1
+    tri_r = count_t / float(len(tri_ref)) if len(tri_ref) != 0 else 0
+    tri_p = count_t / float(len(tri_h)) if len(tri_h) != 0 else 0
+    # tri = (tri_r * tri_p) / float(tri_r + tri_p) if (tri_r + tri_p) != 0 else 0
+
+    bi_h = bigrams(" ".join(h))
+    bi_ref = bigrams(" ".join(ref))
+
+    count_b = 0
+    for b in set(bi_h):
+        if b in set(bi_ref):
+            count_b += 1
+    bi_r = count_b / float(len(bi_ref)) if len(bi_ref) != 0 else 0
+    bi_p = count_b / float(len(bi_h)) if len(bi_h) != 0 else 0
+    # bi = (bi_r * bi_p) / float(bi_r * bi_p) if (bi_r + bi_p) != 0 else 0
+
+    # count_u = 0
+    # for u in set(h):
+    #     if u in set(ref):
+    #         count_u += 1
+    # uni = count_u / float(len(ref))
+    # ngram_r, ngram_p = calc_4grams(h, ref)
+
+    return (tri_r + bi_r)
+
+def pos_tagging(h, ref):
+    hyp_pos = pos_tag(h)
+    ref_pos = pos_tag(ref)
+
+    # sys.stderr.write("pos: %s\n" %(hyp_pos))
+
+    h_pos = [token[1] for token in hyp_pos]
+    r_pos = [token[1] for token in ref_pos]
+
+    return (h_pos, r_pos)
+
+# def word_error_rate(h, r):
+#     d = numpy.zeros((len(r)+1)*(len(h)+1), dtype=numpy.uint8)
+#     d = d.reshape((len(r)+1, len(h)+1))
+#     for i in range(len(r)+1):
+#         for j in range(len(h)+1):
+#             if i == 0:
+#                 d[0][j] = j
+#             elif j == 0:
+#                 d[i][0] = i
+
+#     # computation
+#     for i in range(1, len(r)+1):
+#         for j in range(1, len(h)+1):
+#             if r[i-1] == h[j-1]:
+#                 d[i][j] = d[i-1][j-1]
+#             else:
+#                 substitution = d[i-1][j-1] + 1
+#                 insertion    = d[i][j-1] + 1
+#                 deletion     = d[i-1][j] + 1
+#                 d[i][j] = min(substitution, insertion, deletion)
+
+#     return d[len(r)][len(h)]
+ 
+def main():
+    parser = argparse.ArgumentParser(description='Evaluate translation hypotheses.')
+    parser.add_argument('-i', '--input', default='data/hyp1-hyp2-ref', help='input file (default data/hyp1-hyp2-ref)')
+    parser.add_argument('-n', '--num_sentences', default=None, type=int, help='Number of hypothesis pairs to evaluate')
+    parser.add_argument('-a', '--alpha', default=0.82, type=float, help='Balances precision and recall')
+    parser.add_argument('-b', '--beta', default=1.0, type=float, help='METEOR penalty parameter')
+    parser.add_argument('-g', '--gamma', default=0.21, type=float, help='METEOR penalty parameter')
+    # note that if x == [1, 2, 3], then x[:None] == x[:] == x (copy); no need for sys.maxint
+    opts = parser.parse_args()
+ 
+    # we create a generator and avoid loading all sentences into a list
+    def sentences():
+        with open(opts.input) as f:
+            for pair in f:
+                yield [sentence.lower().strip().split() for sentence in pair.split(' ||| ')]
+ 
+    # note: the -n option does not work in the original code
+    for h1, h2, ref in islice(sentences(), opts.num_sentences):
+        # rset = set(ref)
+
+        # exact matches:
+        # h1_num_matches = word_matches(h1, rset)
+        # h2_num_matches = word_matches(h2, rset)
+
+        (h1_exact_matches, bitvec_h1, bitvec_ref1) = exact_word_matches(h1, ref)
+        (h2_exact_matches, bitvec_h2, bitvec_ref2) = exact_word_matches(h2, ref)
+
+        # porter stemmer:
+        h1_stem = stemming(h1)
+        ref_stem = stemming(ref)
+        h2_stem = stemming(h2)
+
+        # sys.stderr.write("h1_stem: %s\nref_stem: %s\n" %(h1_stem, ref_stem))
+
+        (h1_porter_matches, bitvec_h1, bitvec_ref1) = porter_word_matches(h1_stem, ref_stem, bitvec_h1, bitvec_ref1)
+        (h2_porter_matches, bitvec_h2, bitvec_ref2) = porter_word_matches(h2_stem, ref_stem, bitvec_h2, bitvec_ref2)
+
+        # synsets wordnet:
+        h1_syn = synonyms(h1)
+        h2_syn = synonyms(h2)
+        ref_syn = synonyms(ref)
+        # sys.stderr.write("synonyms: %s\n" %(ref_syn[1]))
+
+        (h1_wn_matches, bitvec_h1, bitvec_ref1) = wordnet_word_matches(h1_syn, ref_syn, bitvec_h1, bitvec_ref1)
+        (h2_wn_matches, bitvec_h2, bitvec_ref2) = wordnet_word_matches(h2_syn, ref_syn, bitvec_h2, bitvec_ref2)
+
+        h1_num_matches = h1_exact_matches + h1_porter_matches + h1_wn_matches
+        h2_num_matches = h2_exact_matches + h2_porter_matches + h2_wn_matches
+
+        # sys.stderr.write("h1_exact_matches: %s\n" %(h1_exact_matches))
+        # sys.stderr.write("h1_porter_matches: %s\n" %(h1_porter_matches))
+        # sys.stderr.write("h1_wn_matches: %s\n" %(h1_wn_matches))
+
+        # precision and recall calculations:
+        precision1 = h1_num_matches / float(len(h1))
+        precision2 = h2_num_matches / float(len(h2))
+
+        recall1 = h1_num_matches / float(len(ref))
+        recall2 = h2_num_matches / float(len(ref))
+
+        h1_score = (precision1 * recall1) / float(((1 - opts.alpha) * recall1) + (opts.alpha * precision1) + 1)
+        h2_score = (precision2 * recall2) / float(((1 - opts.alpha) * recall2) + (opts.alpha * precision2) + 1)
+
+        # meteor penalty:
+        chunk1 = calc_chunks(h1, ref, h1_stem, ref_stem, h1_syn, ref_syn)
+        chunk2 = calc_chunks(h2, ref, h2_stem, ref_stem, h2_syn, ref_syn)
+
+        # sys.stderr.write("chunk1: %s\n" %(chunk1))
+
+        frag1 = chunk1 / float(h1_num_matches) if h1_num_matches != 0 else 0
+        frag2 = chunk2 / float(h2_num_matches) if h2_num_matches != 0 else 0
+
+        penalty1 = opts.gamma * (frag1 ** opts.beta)
+        penalty2 = opts.gamma * (frag2 ** opts.beta)
+
+        h1_match = (1 - penalty1) * h1_score
+        h2_match = (1 - penalty2) * h2_score
+
+        # wer1 = word_error_rate(h1, ref)
+        # wer2 = word_error_rate(h2, ref)
+
+        # wer_score1 = wer1 / len(ref)
+        # wer_score2 = wer2 / len(ref)
+
+        # LEPOR:
+        lp1 = math.exp(1 - (len(h1) / float(len(ref)))) if len(h1) > len(ref) else 1 if len(h1) == len(ref) else math.exp(1 - (len(ref) / float(len(h1))))
+        lp2 = math.exp(1 - (len(h2) / float(len(ref)))) if len(h2) > len(ref) else 1 if len(h1) == len(ref) else math.exp(1 - (len(ref) / float(len(h2))))
+
+        h1_match = (0.65 * h1_match * lp1) + (0.35 * calc_ngrams(h1, ref))
+        h2_match = (0.65 * h2_match * lp2) + (0.35 * calc_ngrams(h2, ref))
+        # h1_match = h1_match * lp1 + calc_ngrams(h1, ref)
+        # h2_match = h2_match * lp2 + calc_ngrams(h2, ref)
+        # h1_match = calc_ngrams(h1, ref) * lp1
+        # h2_match = calc_ngrams(h2, ref) * lp2
+
+        # ROSE FEATURES:
+        # h1_match = (0.4 * h1_match) + (0.1 * lp1) + (0.1 * calc_4grams(h1, ref)[0]) + (0.1 * calc_trigrams(h1, ref)[0]) + (0.1 * calc_bigrams(h1, ref)[0]) + (0.1 * calc_4grams(h1, ref)[1]) + (0.1 * calc_trigrams(h1, ref)[1]) + (0.1 * calc_bigrams(h1, ref)[1])
+        # h2_match = (0.4 * h2_match) + (0.1 * lp2) + (0.1 * calc_4grams(h2, ref)[0]) + (0.1 * calc_trigrams(h2, ref)[0]) + (0.1 * calc_bigrams(h2, ref)[0]) + (0.1 * calc_4grams(h2, ref)[1]) + (0.1 * calc_trigrams(h2, ref)[1]) + (0.1 * calc_bigrams(h2, ref)[1])
+        # h1_match = features(h1, ref, h1_match, lp1)
+        # h2_match = features(h2, ref, h2_match, lp2)
+
+        # h1_match = (0.8 * h1_match) + (0.2 * calc_ngrams(h1, ref) + pos_similarity(h1, ref))
+        # h2_match = (0.8 * h2_match) + (0.2 * calc_ngrams(h2, ref) + pos_similarity(h2, ref))
+        # h1_match = (h1_match) + (calc_ngrams(h1, ref) + pos_similarity(h1, ref))
+        # h2_match = (h2_match) + (calc_ngrams(h2, ref) + pos_similarity(h2, ref))
+
+        # h1_match -= wer_score1
+        # h2_match -= wer_score2
+
+        # sys.stderr.write("bigram + trigram %s\n" %(calc_ngrams(h1, ref)))
+        # sys.stderr.write("h1_num_matches: %s Precision1: %s Recall1: %s Frag1: %s h1_score: %s penalty1: %s h1_match: %s lepor: %s\n" %(h1_num_matches, precision1, recall1, frag1, h1_score, penalty1, h1_match, lp1))
+
+        # h1_match = word_matches(h1, rset)
+        # h2_match = word_matches(h2, rset)
+        print(1 if h1_match > h2_match else # \begin{cases}
+                (0 if h1_match == h2_match
+                    else -1)) # \end{cases}
+
+def features(h, ref, met_score, lepor_pen):
+    # h_pos, ref_pos = pos_tagging(h, ref)
+    # weights = [0.8, 0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    # features_vec = [met_score, lepor_pen, calc_4grams(h, ref)[0], calc_4grams(h, ref)[1], calc_trigrams(h, ref)[0], calc_trigrams(h, ref)[1], calc_bigrams(h, ref)[0], calc_bigrams(h, ref)[1], len(h), calc_4grams(h_pos, ref_pos)[0], calc_4grams(h_pos, ref_pos)[1], calc_trigrams(h_pos, ref_pos)[0], calc_trigrams(h_pos, ref_pos)[1], calc_bigrams(h_pos, ref_pos)[0], calc_bigrams(h_pos, ref_pos)[1]]
+    weights = [0.8, 0.5, 0.2, 0.2, 0.1, 0.1, 0.1, 0.1]#, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    features_vec = [met_score, lepor_pen, calc_4grams(h, ref)[0], calc_4grams(h, ref)[1], calc_trigrams(h, ref)[0], calc_trigrams(h, ref)[1], calc_bigrams(h, ref)[0], calc_bigrams(h, ref)[1]]#, calc_4grams(h_pos, ref_pos)[0], calc_4grams(h_pos, ref_pos)[1], calc_trigrams(h_pos, ref_pos)[0], calc_trigrams(h_pos, ref_pos)[1], calc_bigrams(h_pos, ref_pos)[0], calc_bigrams(h_pos, ref_pos)[1]]
+
+    score = 0
+    for i, weight in enumerate(weights):
+        score += weight * features_vec[i]
+
+    return score
+ 
+# convention to allow import of this file as a module
+if __name__ == '__main__':
+    main()
